@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import React, { useState } from 'react';
 import { type StoryCluster } from '@/lib/analyzer';
@@ -80,7 +80,7 @@ export default function StoryCard({ cluster }: StoryCardProps) {
                         {/* KPI Grid */}
                         <div className="grid grid-cols-3 gap-2 text-center">
                             <div className="p-2 bg-white rounded border border-slate-100">
-                                <span className="block text-[9px] text-slate-400 uppercase font-bold">Polarizaci├│n</span>
+                                <span className="block text-[9px] text-slate-400 uppercase font-bold">Polarización</span>
                                 <span className="text-sm font-black text-slate-800">{analysis.kpis.polarizacion}/10</span>
                             </div>
                             <div className="p-2 bg-white rounded border border-slate-100">
@@ -102,7 +102,7 @@ export default function StoryCard({ cluster }: StoryCardProps) {
                         {analyzing ? (
                             <>
                                 <div className="w-3 h-3 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
-                                Ejecutando Auditor├¡a Neural...
+                                Ejecutando Auditoría Neural...
                             </>
                         ) : (
                             "Auditar Fuentes con Nexus AI"

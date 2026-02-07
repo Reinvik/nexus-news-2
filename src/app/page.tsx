@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import React, { useState, useEffect } from 'react';
 import StoryCard from '@/components/StoryCard';
@@ -46,7 +46,7 @@ export default function NexusNews() {
                             onChange={(e) => setScope(e.target.value)}
                         >
                             <option value="nacional">NACIONAL</option>
-                            <option value="espanol">ESPA├æOL</option>
+                            <option value="espanol">ESPAÑOL</option>
                             <option value="anglo">ENGLISH</option>
                         </select>
                         <button 
@@ -64,7 +64,7 @@ export default function NexusNews() {
                 <div className="mb-8 p-4 bg-slate-900 text-slate-100 rounded-lg flex items-center justify-between">
                     <div>
                         <h2 className="text-xs font-black tracking-widest uppercase opacity-50 mb-1 text-cyan-400">Directriz Arquitecto</h2>
-                        <p className="text-sm font-medium italic">"Menos ruido, mejor se├▒al. Entendiendo el mundo con soberan├¡a."</p>
+                        <p className="text-sm font-medium italic">"Menos ruido, mejor señal. Entendiendo el mundo con soberanía."</p>
                     </div>
                     <div className="hidden md:block text-right">
                         <span className="text-[10px] font-mono opacity-40">NEXUS_CORE_V2.7 // ARCHITECT_MODE</span>

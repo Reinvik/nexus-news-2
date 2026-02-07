@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Interface representing a normalized news item from an API
  */
 export type BiasType = 'left' | 'center-left' | 'center' | 'center-right' | 'right';
@@ -178,7 +178,7 @@ export function filterDiverseClusters(clusters: StoryCluster[]): StoryCluster[] 
 }
 
 function extractMeaningfulEntities(text: string): Set<string> {
-    const generic = new Set(['M├ëXICO', 'CHILE', 'SANTIAGO', 'MUNDO', 'PA├ìS', 'NACIONAL', 'INTERNACIONAL', 'MINUTO', 'AHORA', 'ULTIMO', 'NOTICIAS', 'GOBIERNO', 'PARA', 'COMO', 'ESTE', 'ESTA', 'PERO']);
+    const generic = new Set(['MÉXICO', 'CHILE', 'SANTIAGO', 'MUNDO', 'PAÍS', 'NACIONAL', 'INTERNACIONAL', 'MINUTO', 'AHORA', 'ULTIMO', 'NOTICIAS', 'GOBIERNO', 'PARA', 'COMO', 'ESTE', 'ESTA', 'PERO']);
     const words = text.split(/\s+/);
     const entities = new Set<string>();
     for (const word of words) {
