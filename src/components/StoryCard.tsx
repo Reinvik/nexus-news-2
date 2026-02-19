@@ -9,27 +9,7 @@ interface StoryCardProps {
 }
 
 export default function StoryCard({ cluster }: StoryCardProps) {
-    const [analyzing, setAnalyzing] = useState(false);
-    const [analysis, setAnalysis] = useState<any>(null);
 
-    const runAnalysis = async () => {
-        setAnalyzing(true);
-        try {
-            const res = await fetch('/api/analyze', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ clusterId: cluster.id, items: cluster.items })
-            });
-            const data = await res.json();
-            if (data.analysis) {
-                setAnalysis(data.analysis);
-            }
-        } catch (e) {
-            console.error("Analysis failed", e);
-        } finally {
-            setAnalyzing(false);
-        }
-    };
 
     return (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow flex flex-col">
@@ -47,7 +27,7 @@ export default function StoryCard({ cluster }: StoryCardProps) {
                 <h3 className="text-lg font-bold text-slate-900 leading-tight mb-3">
                     {cluster.mainTitle}
                 </h3>
-                
+
                 <p className="text-sm text-slate-600 mb-6 line-clamp-3">
                     {cluster.summary}
                 </p>
@@ -61,55 +41,40 @@ export default function StoryCard({ cluster }: StoryCardProps) {
                             </span>
                         ))}
                     </div>
-                    
+
                     <BiasBar distribution={cluster.biasDistribution} />
                 </div>
             </div>
 
-            {/* Analysis Action */}
-            <div className="p-5 bg-slate-50 border-t border-slate-100">
-                {analysis ? (
+            {/* Pre-Computed Analysis (If Available) */}
+            {cluster.analysis && (
+                <div className="p-5 bg-slate-50 border-t border-slate-100">
                     <div className="space-y-4">
                         <div className="p-4 bg-white border border-slate-200 rounded-lg shadow-inner">
                             <h4 className="text-[10px] font-black uppercase text-slate-400 mb-2 tracking-widest">Sintesis Nexus</h4>
                             <p className="text-sm text-slate-700 leading-relaxed italic font-serif">
-                                {analysis.resumen_ejecutivo}
+                                {cluster.analysis.resumen_ejecutivo}
                             </p>
                         </div>
-                        
+
                         {/* KPI Grid */}
                         <div className="grid grid-cols-3 gap-2 text-center">
                             <div className="p-2 bg-white rounded border border-slate-100">
                                 <span className="block text-[9px] text-slate-400 uppercase font-bold">Polarización</span>
-                                <span className="text-sm font-black text-slate-800">{analysis.kpis.polarizacion}/10</span>
+                                <span className="text-sm font-black text-slate-800">{cluster.analysis.kpis?.polarizacion || '-'}/10</span>
                             </div>
                             <div className="p-2 bg-white rounded border border-slate-100">
                                 <span className="block text-[9px] text-slate-400 uppercase font-bold">Diversidad</span>
-                                <span className="text-sm font-black text-slate-800 uppercase">{analysis.kpis.diversidad}</span>
+                                <span className="text-sm font-black text-slate-800 uppercase">{cluster.analysis.kpis?.diversidad || '-'}</span>
                             </div>
                             <div className="p-2 bg-white rounded border border-slate-100">
-                                <span className="block text-[9px] text-slate-400 uppercase font-bold">Sesgo Detectado</span>
-                                <span className="text-sm font-black text-slate-800 uppercase">Activo</span>
+                                <span className="block text-[9px] text-slate-400 uppercase font-bold">IA Modelo</span>
+                                <span className="text-sm font-black text-slate-800 uppercase">GEMINI 2.0</span>
                             </div>
                         </div>
                     </div>
-                ) : (
-                    <button 
-                        onClick={runAnalysis}
-                        disabled={analyzing}
-                        className="w-full py-3 px-4 bg-slate-900 text-white text-xs font-black uppercase tracking-widest rounded-lg hover:bg-slate-800 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                    >
-                        {analyzing ? (
-                            <>
-                                <div className="w-3 h-3 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
-                                Ejecutando Auditoría Neural...
-                            </>
-                        ) : (
-                            "Auditar Fuentes con Nexus AI"
-                        )}
-                    </button>
-                )}
-            </div>
+                </div>
+            )}
         </div>
     );
 }

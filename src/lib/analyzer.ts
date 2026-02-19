@@ -17,14 +17,14 @@ export interface NewsItem {
  * Curated list of domains for reliable news fetching.
  */
 export const CHILE_LEFT_LIST = [
-    'elmostrador.cl', 'eldesconcierto.cl', 'theclinic.cl', 'elciudadano.com', 
-    'laizquierdadiario.cl', 'cooperativa.cl', 'cnnchile.com', 'radio.uchile.cl', 
+    'elmostrador.cl', 'eldesconcierto.cl', 'theclinic.cl', 'elciudadano.com',
+    'laizquierdadiario.cl', 'cooperativa.cl', 'cnnchile.com', 'radio.uchile.cl',
     'interferencia.cl', 'ciperchile.cl'
 ];
 export const CHILE_LEFT = CHILE_LEFT_LIST.join(',');
 
 export const CHILE_RIGHT_CENTER_LIST = [
-    'latercera.com', 'biobiochile.cl', 'emol.com', '24horas.cl', 
+    'latercera.com', 'biobiochile.cl', 'emol.com', '24horas.cl',
     't13.cl', 'radioagricultura.cl', 'adnradio.cl', 'meganoticias.cl'
 ];
 export const CHILE_RIGHT_CENTER = CHILE_RIGHT_CENTER_LIST.join(',');
@@ -37,7 +37,7 @@ export const INTL_LEFT = [
 ].join(',');
 
 export const INTL_RIGHT_CENTER = [
-    'infobae.com', 'clarin.com', 'lanacion.com.ar', 'elmundo.es', 
+    'infobae.com', 'clarin.com', 'lanacion.com.ar', 'elmundo.es',
     'lavanguardia.com', 'abc.es', 'cnn.com', 'bbc.com', 'dw.com'
 ].join(',');
 
@@ -64,8 +64,15 @@ export interface StoryCluster {
     items: NewsItem[];
     biasDistribution: Record<BiasType, number>;
     firstPublishedAt: string;
-    blindspot?: boolean; 
-    blindspotSide?: 'left' | 'right'; 
+    blindspot?: boolean;
+    blindspotSide?: 'left' | 'right';
+    analysis?: {
+        resumen_ejecutivo: string;
+        kpis: {
+            polarizacion: number;
+            diversidad: string;
+        }
+    };
 }
 
 /**
@@ -74,23 +81,23 @@ export interface StoryCluster {
  */
 export function getBiasForSource(sourceName: string): BiasType {
     const s = sourceName.toLowerCase();
-    
+
     // LEFT
-    if (s.includes('desconcierto') || s.includes('izquierda') || s.includes('ciudadano') || 
+    if (s.includes('desconcierto') || s.includes('izquierda') || s.includes('ciudadano') ||
         s.includes('pagina12') || s.includes('rt.com') || s === 'rt' || s.includes('guardian')) return 'left';
-    
+
     // CENTER-LEFT
-    if (s.includes('mostrador') || s.includes('cooperativa') || s.includes('uchile') || 
-        s.includes('interferencia') || s.includes('ciper') || s.includes('elpais') || 
+    if (s.includes('mostrador') || s.includes('cooperativa') || s.includes('uchile') ||
+        s.includes('interferencia') || s.includes('ciper') || s.includes('elpais') ||
         s.includes('nytimes') || s.includes('aljazeera')) return 'center-left';
-    
+
     // CENTER-RIGHT
-    if (s.includes('tercera') || s.includes('meganoticias') || s.includes('t13') || 
+    if (s.includes('tercera') || s.includes('meganoticias') || s.includes('t13') ||
         s.includes('clarin') || s.includes('lavanguardia')) return 'center-right';
-    
+
     // RIGHT
-    if (s.includes('mercurio') || s.includes('emol') || s.includes('agricultura') || 
-        s.includes('infobae') || s.includes('lanacion') || s.includes('abc') || 
+    if (s.includes('mercurio') || s.includes('emol') || s.includes('agricultura') ||
+        s.includes('infobae') || s.includes('lanacion') || s.includes('abc') ||
         s.includes('foxnews') || s.includes('wsj') || s.includes('nypost') || s.includes('elmundo')) return 'right';
 
     // CENTER / NEUTRAL
@@ -115,11 +122,11 @@ export function clusterStories(stories: NewsItem[]): StoryCluster[] {
             const timeDiff = Math.abs(new Date(story.publishedAt).getTime() - new Date(cluster.firstPublishedAt).getTime());
             const hoursDiff = timeDiff / (1000 * 60 * 60);
 
-            if (hoursDiff < 36) { 
+            if (hoursDiff < 36) {
                 const similarity = jaccardSimilarity(story.title, cluster.mainTitle);
                 const storyEntities = extractMeaningfulEntities(story.title);
                 const clusterEntities = extractMeaningfulEntities(cluster.mainTitle);
-                
+
                 const sharedEntities = [...storyEntities].filter(e => clusterEntities.has(e));
                 const sharedCount = sharedEntities.length;
 
@@ -127,7 +134,7 @@ export function clusterStories(stories: NewsItem[]): StoryCluster[] {
                 if (sharedCount >= 2 || (sharedCount >= 1 && similarity > 0.2) || similarity > 0.4) {
                     cluster.items.push(story);
                     if (story.bias) cluster.biasDistribution[story.bias]++;
-                    
+
                     if (!cluster.mainTitle.includes('.cl') && story.url.includes('.cl')) {
                         cluster.mainTitle = story.title;
                         cluster.summary = story.description || story.title;

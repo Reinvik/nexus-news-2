@@ -7,16 +7,19 @@ import { type StoryCluster } from '@/lib/analyzer';
 export default function NexusNews() {
     const [clusters, setClusters] = useState<StoryCluster[]>([]);
     const [loading, setLoading] = useState(true);
-    const [category, setCategory] = useState('general');
     const [scope, setScope] = useState('nacional');
+    const [digestMeta, setDigestMeta] = useState<any>(null);
 
     const fetchNews = async () => {
         setLoading(true);
         try {
-            const res = await fetch(`/api/news?scope=${scope}&category=${category}`);
+            const res = await fetch(`/api/news?scope=${scope}`);
             const data = await res.json();
             if (data.clusters) {
                 setClusters(data.clusters);
+            }
+            if (data.meta) {
+                setDigestMeta(data.meta);
             }
         } catch (e) {
             console.error("Failed to fetch news", e);
@@ -27,7 +30,7 @@ export default function NexusNews() {
 
     useEffect(() => {
         fetchNews();
-    }, [category, scope]);
+    }, [scope]);
 
     return (
         <div className="min-h-screen bg-slate-50 text-slate-900 font-sans antialiased">
@@ -38,9 +41,9 @@ export default function NexusNews() {
                         <div className="w-8 h-8 bg-slate-900 rounded flex items-center justify-center text-white font-bold text-lg">N</div>
                         <h1 className="text-xl font-bold tracking-tight text-slate-900 uppercase">Nexus News</h1>
                     </div>
-                    
+
                     <div className="flex items-center gap-4">
-                        <select 
+                        <select
                             className="bg-slate-100 border-none text-xs font-bold py-2 px-3 rounded text-slate-700 outline-none cursor-pointer"
                             value={scope}
                             onChange={(e) => setScope(e.target.value)}
@@ -49,7 +52,7 @@ export default function NexusNews() {
                             <option value="espanol">ESPAÑOL</option>
                             <option value="anglo">ENGLISH</option>
                         </select>
-                        <button 
+                        <button
                             onClick={fetchNews}
                             className="bg-slate-900 text-white text-xs font-bold py-2 px-4 rounded hover:bg-slate-800 transition-colors"
                         >
@@ -71,22 +74,15 @@ export default function NexusNews() {
                     </div>
                 </div>
 
-                {/* Filters */}
-                <div className="flex gap-2 mb-8 overflow-x-auto pb-2 no-scrollbar">
-                    {['general', 'politica', 'economia', 'tecnologia', 'salud', 'cultura'].map(cat => (
-                        <button
-                            key={cat}
-                            onClick={() => setCategory(cat)}
-                            className={`px-4 py-2 rounded text-xs font-bold transition-all uppercase tracking-wide border ${
-                                category === cat 
-                                ? 'bg-slate-900 text-white border-slate-900 shadow-md' 
-                                : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400'
-                            }`}
-                        >
-                            {cat}
-                        </button>
-                    ))}
-                </div>
+                {/* Validated Digest Info */}
+                {digestMeta && (
+                    <div className="flex items-center gap-2 mb-6 px-4 py-2 bg-emerald-50 border border-emerald-100 rounded-full w-fit">
+                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                        <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wide">
+                            DIGEST VALIDADO: {digestMeta.date} • {digestMeta.count} EVENTOS PROCESADOS
+                        </span>
+                    </div>
+                )}
 
                 {/* Content */}
                 {loading ? (
