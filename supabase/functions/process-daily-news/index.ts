@@ -1,348 +1,368 @@
-import { createClient } from 'jsr:@supabase/supabase-js'
-import { GoogleGenerativeAI } from 'npm:@google/generative-ai'
+import { createClient } from "@supabase/supabase-js";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
+    getBiasForSource,
     CHILE_LEFT, CHILE_RIGHT_CENTER,
     INTL_LEFT, INTL_RIGHT_CENTER,
     ANGLO_LEFT, ANGLO_RIGHT_CENTER,
-    getBiasForSource
-} from './utils.ts'
+    type BiasType,
+} from "./utils.ts";
 
-// --- CONFIG ---
-const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
-const SUPABASE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-const GEMINI_API_KEY = Deno.env.get('GOOGLE_GENERATIVE_AI_API_KEY')!
-
-const NEWS_API_KEY = Deno.env.get('NEWS_API_KEY')
-const NEWS_DATA_KEY = Deno.env.get('NEWSDATA_API_KEY')
-const GNEWS_KEY = Deno.env.get('GNEWS_API_KEY')
-const WORLD_NEWS_KEY = Deno.env.get('WORLD_NEWS_API_KEY')
-const CURRENTS_KEY = Deno.env.get('CURRENTS_API_KEY')
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
-// Using 2.0 Flash for speed & cost/performance
-const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
-
-// --- TYPES ---
 interface NewsItem {
-    url: string
-    title: string
-    source: string
-    publishedAt: string
-    description?: string
-    urlToImage?: string
-    bias?: string
+    url: string;
+    title: string;
+    source: string;
+    publishedAt: string;
+    description?: string;
+    bias?: BiasType;
 }
 
-interface StoryCluster {
-    id: string
-    mainTitle: string
-    summary: string
-    items: NewsItem[]
-    biasDistribution: Record<string, number>
-    firstPublishedAt: string
-    blindspot?: boolean
-    blindspotSide?: 'left' | 'right'
-    // Analysis
-    analysis?: {
-        resumen_ejecutivo: string
-        kpis: {
-            polarizacion: number
-            diversidad: string
-        }
+const TIMEOUT_MS = 12000;
+
+async function fetchWithTimeout(url: string): Promise<Response | null> {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+        const res = await fetch(url, { signal: controller.signal });
+        clearTimeout(id);
+        return res.ok ? res : null;
+    } catch {
+        clearTimeout(id);
+        return null;
     }
 }
 
-// --- WORKER ---
+// ----- Fetch from different APIs -----
 
-Deno.serve(async (req) => {
-    console.log("[JOB START] process-daily-news starting...")
+async function fetchNewsAPI(apiKey: string, domains: string, language: string): Promise<NewsItem[]> {
+    if (!apiKey || !domains) return [];
+    const url = `https://newsapi.org/v2/everything?domains=${domains}&language=${language}&sortBy=publishedAt&pageSize=100&apiKey=${apiKey}`;
+    const res = await fetchWithTimeout(url);
+    if (!res) return [];
+    const data = await res.json();
+    return (data.articles || [])
+        .filter((a: any) => a.title && a.source?.name && a.title !== '[Removed]')
+        .map((a: any) => ({
+            url: a.url, title: a.title.split(' - ')[0], source: a.source.name,
+            publishedAt: a.publishedAt, description: a.description,
+        }));
+}
 
-    if (!GEMINI_API_KEY) return new Response("Missing GEMINI_API_KEY", { status: 500 })
+async function fetchGNews(apiKey: string, query: string, lang: string): Promise<NewsItem[]> {
+    if (!apiKey) return [];
+    const url = `https://gnews.io/api/v4/search?token=${apiKey}&lang=${lang}&max=10&sortby=publishedAt&q=${encodeURIComponent(query)}`;
+    const res = await fetchWithTimeout(url);
+    if (!res) return [];
+    const data = await res.json();
+    return (data.articles || []).map((a: any) => ({
+        url: a.url, title: a.title, source: a.source?.name || 'GNews',
+        publishedAt: a.publishedAt, description: a.description,
+    }));
+}
 
+async function fetchNewsDataIO(apiKey: string, lang: string, country?: string): Promise<NewsItem[]> {
+    if (!apiKey) return [];
+    let url = `https://newsdata.io/api/1/latest?apikey=${apiKey}&language=${lang}&size=10`;
+    if (country) url += `&country=${country}`;
+    const res = await fetchWithTimeout(url);
+    if (!res) return [];
+    const data = await res.json();
+    return (data.results || []).map((a: any) => ({
+        url: a.link, title: a.title, source: a.source_id,
+        publishedAt: a.pubDate, description: a.description,
+    }));
+}
+
+async function fetchWorldNews(apiKey: string, lang: string, countries?: string): Promise<NewsItem[]> {
+    if (!apiKey) return [];
+    let url = `https://api.worldnewsapi.com/search-news?api-key=${apiKey}&language=${lang}&number=15&text=noticias`;
+    if (countries) url += `&source-countries=${countries}`;
+    const res = await fetchWithTimeout(url);
+    if (!res) return [];
+    const data = await res.json();
+    return (data.news || []).map((a: any) => ({
+        url: a.url, title: a.title, source: a.source_country?.toUpperCase() || 'WorldNews',
+        publishedAt: a.publish_date, description: a.text?.substring(0, 200),
+    }));
+}
+
+// ----- Scope Config -----
+interface ScopeConfig {
+    leftDomains: string; rightDomains: string; language: string;
+    gnewsQuery: string; country?: string; worldCountries?: string;
+}
+
+function getScopeConfig(scope: string): ScopeConfig {
+    switch (scope) {
+        case 'nacional': return { leftDomains: CHILE_LEFT, rightDomains: CHILE_RIGHT_CENTER, language: 'es', gnewsQuery: 'chile', country: 'cl', worldCountries: 'cl' };
+        case 'espanol': return { leftDomains: `${CHILE_LEFT},${INTL_LEFT}`, rightDomains: `${CHILE_RIGHT_CENTER},${INTL_RIGHT_CENTER}`, language: 'es', gnewsQuery: 'noticias', worldCountries: 'cl,ar,es,co,mx,pe' };
+        case 'anglo': return { leftDomains: ANGLO_LEFT, rightDomains: ANGLO_RIGHT_CENTER, language: 'en', gnewsQuery: 'world news', worldCountries: 'us,gb' };
+        default: return { leftDomains: CHILE_LEFT, rightDomains: CHILE_RIGHT_CENTER, language: 'es', gnewsQuery: 'chile', country: 'cl', worldCountries: 'cl' };
+    }
+}
+
+
+// ----- Resilient Fallback Clustering Algorithm -----
+
+function getFallbackClusters(allArticles: NewsItem[]): any[] {
+    const stopWords = new Set(["el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "en", "y", "o", "con", "para", "por", "sobre", "a", "al", "se", "es", "su", "sus", "the", "of", "and", "in", "to", "a", "for", "on"]);
+    
+    const clusters: any[] = [];
+    const used = new Set<string>();
+    
+    // Group by title similarity
+    for (let i = 0; i < allArticles.length; i++) {
+        const a = allArticles[i];
+        if (used.has(a.url)) continue;
+        
+        const clusterItems = [a];
+        used.add(a.url);
+        
+        // Get words of current article title
+        const wordsA = a.title.toLowerCase()
+            .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g, "")
+            .split(/\s+/)
+            .filter(w => w.length > 3 && !stopWords.has(w));
+            
+        for (let j = i + 1; j < allArticles.length; j++) {
+            const b = allArticles[j];
+            if (used.has(b.url)) continue;
+            
+            const wordsB = b.title.toLowerCase()
+                .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g, "")
+                .split(/\s+/)
+                .filter(w => w.length > 3 && !stopWords.has(w));
+                
+            // Check intersection of words
+            const commonWords = wordsA.filter(w => wordsB.includes(w));
+            if (commonWords.length >= 2) { // 2 or more common words
+                clusterItems.push(b);
+                used.add(b.url);
+            }
+        }
+        
+        if (clusterItems.length >= 2) {
+            clusterItems.sort((x, y) => new Date(y.publishedAt).getTime() - new Date(x.publishedAt).getTime());
+            const main = clusterItems[0];
+            
+            const biasDist: Record<string, number> = { left: 0, "center-left": 0, center: 0, "center-right": 0, right: 0 };
+            clusterItems.forEach(it => { if (it.bias && biasDist[it.bias] !== undefined) biasDist[it.bias]++; });
+            
+            let blindspot = false, blindspotSide: string | undefined;
+            const leftBlock = biasDist.left + biasDist["center-left"];
+            const rightBlock = biasDist.right + biasDist["center-right"];
+            if (leftBlock > 0 && rightBlock === 0) { blindspot = true; blindspotSide = "right"; }
+            else if (rightBlock > 0 && leftBlock === 0) { blindspot = true; blindspotSide = "left"; }
+            
+            clusters.push({
+                id: crypto.randomUUID(),
+                mainTitle: main.title,
+                summary: main.description || main.title,
+                items: clusterItems,
+                biasDistribution: biasDist,
+                firstPublishedAt: main.publishedAt,
+                blindspot,
+                blindspotSide,
+                analysis: {
+                    resumen_ejecutivo: "Análisis automático (Fallback). Se agruparon las noticias por coincidencia de palabras clave en el titular. Se requiere renovar o actualizar la API Key de Gemini en los secretos de Supabase para obtener el análisis político e interpretativo completo.",
+                    kpis: { polarizacion: 3.0, diversidad: "MEDIA" }
+                }
+            });
+        }
+    }
+    
+    // Sort clusters by size
+    clusters.sort((a, b) => b.items.length - a.items.length);
+    return clusters;
+}
+
+// ----- Main Processing -----
+
+Deno.serve(async (_req) => {
     try {
-        // Run for all scopes concurrently
-        const scopes = ['nacional', 'espanol', 'anglo']
-        const results = await Promise.all(scopes.map(processScope))
+        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+        const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        const supabase = createClient(supabaseUrl, supabaseKey);
+
+        const newsApiKey = Deno.env.get("NEWS_API_KEY") || "";
+        const gnewsKey = Deno.env.get("GNEWS_API_KEY") || "";
+        const newsDataKey = Deno.env.get("NEWSDATA_API_KEY") || "";
+        const worldNewsKey = Deno.env.get("WORLD_NEWS_API_KEY") || "";
+        const geminiKey = Deno.env.get("GOOGLE_GENERATIVE_AI_API_KEY") || "";
+
+        const scopes = ["nacional", "espanol", "anglo"];
+        const results: Record<string, any> = {};
+
+        for (const scope of scopes) {
+            console.log(`\n=== Processing scope: ${scope} ===`);
+            try {
+                const config = getScopeConfig(scope);
+
+                // 1) Fetch from multiple APIs in parallel
+                const [leftArticles, rightArticles, gnewsArticles, newsDataArticles, worldArticles] = await Promise.all([
+                    fetchNewsAPI(newsApiKey, config.leftDomains, config.language),
+                    fetchNewsAPI(newsApiKey, config.rightDomains, config.language),
+                    fetchGNews(gnewsKey, config.gnewsQuery, config.language),
+                    fetchNewsDataIO(newsDataKey, config.language, config.country),
+                    fetchWorldNews(worldNewsKey, config.language, config.worldCountries),
+                ]);
+
+                let allArticles = [...leftArticles, ...rightArticles, ...gnewsArticles, ...newsDataArticles, ...worldArticles];
+
+                // 2) Deduplicate
+                const seen = new Set<string>();
+                allArticles = allArticles.filter(a => {
+                    if (!a.title || !a.url || seen.has(a.url)) return false;
+                    seen.add(a.url);
+                    return true;
+                });
+
+                // 3) Assign bias
+                allArticles.forEach(a => { a.bias = getBiasForSource(a.source); });
+
+                console.log(`[${scope}] Total unique articles: ${allArticles.length}`);
+
+                if (allArticles.length === 0) {
+                    await supabase.from("news_daily_digest").upsert({
+                        scope, digest_date: new Date().toISOString().split("T")[0],
+                        clusters: [], raw_article_count: 0, cluster_count: 0,
+                        processing_status: "complete", error_message: "No articles found from any API",
+                    }, { onConflict: "scope,digest_date" });
+                    results[scope] = { status: "empty", articles: 0 };
+                    continue;
+                }
+
+                // 4) Gemini Clustering
+                let clusters: any[] = [];
+                let usingFallback = false;
+                let clusteringErrorMsg: string | null = null;
+
+                if (geminiKey) {
+                    try {
+                        const genAI = new GoogleGenerativeAI(geminiKey);
+                        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+
+                        const simplified = allArticles.map((a, i) => ({ id: i, title: a.title, desc: a.description?.substring(0, 80) || "" }));
+                        const clusterPrompt = `You are an expert news aggregator. Group these articles into clusters by EVENT.\nArticles: ${JSON.stringify(simplified)}\nReturn STRICT JSON array of arrays of IDs. Example: [[0,2],[1],[3,4,5]]\nReturn ONLY the JSON. No markdown.`;
+
+                        const result = await model.generateContent(clusterPrompt);
+                        const text = result.response.text().replace(/```json/g, "").replace(/```/g, "").trim();
+                        const groupedIndices: number[][] = JSON.parse(text);
+
+                        // Build clusters from indices
+                        for (const indices of groupedIndices) {
+                            const items = indices.map(i => allArticles[i]).filter(Boolean);
+                            if (items.length === 0) continue;
+
+                            items.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
+                            const main = items[0];
+
+                            const biasDist: Record<string, number> = { left: 0, "center-left": 0, center: 0, "center-right": 0, right: 0 };
+                            items.forEach(it => { if (it.bias && biasDist[it.bias] !== undefined) biasDist[it.bias]++; });
+
+                            let blindspot = false, blindspotSide: string | undefined;
+                            const leftBlock = biasDist.left + biasDist["center-left"];
+                            const rightBlock = biasDist.right + biasDist["center-right"];
+                            if (leftBlock > 0 && rightBlock === 0) { blindspot = true; blindspotSide = "right"; }
+                            else if (rightBlock > 0 && leftBlock === 0) { blindspot = true; blindspotSide = "left"; }
+
+                            clusters.push({
+                                id: crypto.randomUUID(),
+                                mainTitle: main.title,
+                                summary: main.description || main.title,
+                                items,
+                                biasDistribution: biasDist,
+                                firstPublishedAt: main.publishedAt,
+                                blindspot,
+                                blindspotSide,
+                            });
+                        }
+
+                        // Filter: keep clusters with >=2 articles
+                        clusters = clusters.filter(c => c.items.length >= 2);
+
+                        // 5) Gemini Analysis per cluster (top 8)
+                        const toAnalyze = clusters.slice(0, 8);
+                        for (const cluster of toAnalyze) {
+                            try {
+                                const articleList = cluster.items.map((a: NewsItem) =>
+                                    `- Fuente: ${a.source} (${a.bias || "center"})\n  Titular: ${a.title}\n  Resumen: ${a.description || ""}`
+                                ).join("\n\n");
+
+                                const analysisPrompt = `Actúa como un Auditor de Datos y Analista Político Senior experto en medios.
+Se te entrega un grupo de artículos sobre un mismo evento. Expón las discrepancias y puntos ciegos.
+
+ARTÍCULOS:
+${articleList}
+
+FORMATO DE SALIDA (STRICT JSON):
+{
+  "resumen_ejecutivo": "Patrón detectado...",
+  "kpis": { "polarizacion": 5.0, "diversidad": "ALTA" }
+}
+
+Retorna SOLO el JSON. Sin markdown.`;
+
+                                const analysisResult = await model.generateContent(analysisPrompt);
+                                const analysisText = analysisResult.response.text().replace(/```json/g, "").replace(/```/g, "").trim();
+                                cluster.analysis = JSON.parse(analysisText);
+                            } catch (e) {
+                                console.error(`[${scope}] Analysis failed for cluster:`, e);
+                            }
+                        }
+
+                        console.log(`[${scope}] Gemini produced ${clusters.length} clusters`);
+                    } catch (e: any) {
+                        console.error(`[${scope}] Gemini clustering failed, using fallback:`, e);
+                        usingFallback = true;
+                        clusteringErrorMsg = e.message || String(e);
+                        clusters = getFallbackClusters(allArticles);
+                    }
+                } else {
+                    console.log(`[${scope}] No geminiKey provided, using fallback clustering`);
+                    usingFallback = true;
+                    clusteringErrorMsg = "No GOOGLE_GENERATIVE_AI_API_KEY secret configured";
+                    clusters = getFallbackClusters(allArticles);
+                }
+
+
+                // 6) Save to Supabase
+                const digestDate = new Date().toISOString().split("T")[0];
+                await supabase.from("news_daily_digest").upsert({
+                    scope,
+                    digest_date: digestDate,
+                    clusters,
+                    raw_article_count: allArticles.length,
+                    cluster_count: clusters.length,
+                    processing_status: "complete",
+                    error_message: clusteringErrorMsg,
+                }, { onConflict: "scope,digest_date" });
+
+                results[scope] = { status: "complete", articles: allArticles.length, clusters: clusters.length };
+
+            } catch (scopeError: any) {
+                console.error(`[${scope}] Error:`, scopeError);
+                const digestDate = new Date().toISOString().split("T")[0];
+                await supabase.from("news_daily_digest").upsert({
+                    scope, digest_date: digestDate, clusters: [],
+                    raw_article_count: 0, cluster_count: 0,
+                    processing_status: "error", error_message: scopeError.message,
+                }, { onConflict: "scope,digest_date" });
+                results[scope] = { status: "error", error: scopeError.message };
+            }
+        }
+
+        // 7) Cleanup old digests (>7 days)
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - 7);
+        await supabase.from("news_daily_digest").delete().lt("digest_date", cutoff.toISOString().split("T")[0]);
 
         return new Response(JSON.stringify({ success: true, results }), {
-            headers: { 'Content-Type': 'application/json' }
-        })
+            headers: { "Content-Type": "application/json" },
+        });
 
     } catch (error: any) {
-        console.error("CRITICAL JOB ERROR:", error)
-        return new Response(JSON.stringify({ error: error.message }), { status: 500 })
+        console.error("Fatal error:", error);
+        return new Response(JSON.stringify({ error: error.message }), { status: 500 });
     }
-})
-
-async function processScope(scope: string) {
-    console.log(`[SCOPE: ${scope}] Starting processing...`)
-
-    // 1. Fetch News (Multi-source parallel fetch)
-    const rawArticles = await fetchNewsForScope(scope)
-    console.log(`[SCOPE: ${scope}] Fetched ${rawArticles.length} raw articles.`)
-
-    if (rawArticles.length === 0) {
-        return { scope, status: 'skipped', reason: 'no articles found' }
-    }
-
-    // 2. Prepare for Gemini Clustering
-    // We send a simplified list to save tokens
-    const simplifiedList = rawArticles.slice(0, 150).map((a, idx) => ({
-        id: idx,
-        title: a.title,
-        source: a.source,
-        desc: a.description?.substring(0, 100) || ""
-    }))
-
-    // 3. Gemini Clustering
-    const clusters = await performGeminiClustering(simplifiedList, rawArticles)
-
-    // 4. Gemini Analysis (Per cluster)
-    // Only analyze significant clusters (>= 2 items) to save time/tokens
-    const significantClusters = clusters.filter(c => c.items.length >= 2)
-
-    console.log(`[SCOPE: ${scope}] Analyzing ${significantClusters.length} significant clusters...`)
-
-    for (const cluster of significantClusters) {
-        try {
-            const analysis = await analyzeCluster(cluster)
-            if (analysis) {
-                cluster.analysis = analysis
-            }
-        } catch (e) {
-            console.error(`[SCOPE: ${scope}] Cluster analysis failed:`, e)
-        }
-    }
-
-    // 5. Store in DB
-    const digest = {
-        scope,
-        digest_date: new Date().toISOString().split('T')[0], // YYYY-MM-DD
-        clusters: clusters, // JSONB
-        raw_article_count: rawArticles.length,
-        cluster_count: clusters.length,
-        processing_status: 'complete'
-    }
-
-    const { error } = await supabase
-        .from('news_daily_digest')
-        .upsert(digest, { onConflict: 'scope, digest_date' })
-
-    if (error) {
-        console.error(`[SCOPE: ${scope}] DB Upsert Error:`, error)
-        throw error
-    }
-
-    console.log(`[SCOPE: ${scope}] Success. Stored ${clusters.length} clusters.`)
-    return { scope, status: 'success', clusterCount: clusters.length }
-}
-
-// --- FETCHING LOGIC (Simplified from frontend) ---
-
-async function fetchNewsForScope(scope: string): Promise<NewsItem[]> {
-    let domains = ''
-    let language = 'es'
-
-    if (scope === 'nacional') {
-        domains = `${CHILE_LEFT},${CHILE_RIGHT_CENTER}`
-    } else if (scope === 'espanol') {
-        domains = `${CHILE_LEFT},${INTL_LEFT},${CHILE_RIGHT_CENTER},${INTL_RIGHT_CENTER}`
-    } else if (scope === 'anglo') {
-        domains = `${ANGLO_LEFT},${ANGLO_RIGHT_CENTER}`
-        language = 'en'
-    }
-
-    // Parallel fetch from multiple providers if keys exist
-    const promises: Promise<NewsItem[]>[] = []
-
-    // 1. NewsAPI (Primary)
-    if (NEWS_API_KEY) {
-        promises.push(fetchNewsAPI(domains, language))
-    }
-
-    // 2. GNews (Secondary)
-    if (GNEWS_KEY) {
-        // Simplified fallback query
-        const q = scope === 'nacional' ? 'chile' : (scope === 'espanol' ? 'noticias' : 'news')
-        promises.push(fetchGNews(q, language))
-    }
-
-    // 3. NewsData (Tertiary)
-    if (NEWS_DATA_KEY) {
-        promises.push(fetchNewsData(scope, language))
-    }
-
-    const results = await Promise.all(promises)
-    const allArticles = results.flat()
-
-    // Deduplicate by URL
-    const seen = new Set()
-    return allArticles.filter(a => {
-        if (seen.has(a.url)) return false
-        seen.add(a.url)
-        return true
-    })
-}
-
-async function fetchNewsAPI(domains: string, lang: string): Promise<NewsItem[]> {
-    try {
-        const url = `https://newsapi.org/v2/everything?domains=${domains}&language=${lang}&sortBy=publishedAt&pageSize=100&apiKey=${NEWS_API_KEY}`
-        const res = await fetch(url)
-        const data = await res.json()
-        if (data.status !== 'ok') return []
-
-        return data.articles
-            .filter((a: any) => a.title !== '[Removed]')
-            .map((a: any) => ({
-                url: a.url,
-                title: a.title,
-                source: a.source.name,
-                publishedAt: a.publishedAt,
-                description: a.description,
-                urlToImage: a.urlToImage,
-                bias: getBiasForSource(a.source.name)
-            }))
-    } catch (e) {
-        console.error("NewsAPI Error:", e)
-        return []
-    }
-}
-
-async function fetchGNews(query: string, lang: string): Promise<NewsItem[]> {
-    try {
-        const url = `https://gnews.io/api/v4/search?q=${query}&lang=${lang}&max=10&token=${GNEWS_KEY}`
-        const res = await fetch(url)
-        const data = await res.json()
-        if (!data.articles) return []
-
-        return data.articles.map((a: any) => ({
-            url: a.url,
-            title: a.title,
-            source: a.source.name,
-            publishedAt: a.publishedAt,
-            description: a.description,
-            urlToImage: a.image,
-            bias: getBiasForSource(a.source.name)
-        }))
-    } catch (e) {
-        console.error("GNews Error:", e)
-        return []
-    }
-}
-
-async function fetchNewsData(scope: string, lang: string): Promise<NewsItem[]> {
-    try {
-        let url = `https://newsdata.io/api/1/latest?apikey=${NEWS_DATA_KEY}&language=${lang}`
-        if (scope === 'nacional') url += '&country=cl'
-
-        const res = await fetch(url)
-        const data = await res.json()
-        if (!data.results) return []
-
-        return data.results.map((a: any) => ({
-            url: a.link,
-            title: a.title,
-            source: a.source_id,
-            publishedAt: a.pubDate,
-            description: a.description,
-            urlToImage: a.image_url,
-            bias: getBiasForSource(a.source_id)
-        }))
-    } catch (e) {
-        console.error("NewsData Error:", e)
-        return []
-    }
-}
-
-// --- AI LOGIC ---
-
-async function performGeminiClustering(simplifiedList: any[], originalArticles: NewsItem[]): Promise<StoryCluster[]> {
-    const prompt = `
-    You are an expert news aggregator. Group the following news articles into clusters based on the EVENT they are reporting.
-    Articles about the EXACT SAME event/topic should be in the same cluster.
-    
-    Input Articles:
-    ${JSON.stringify(simplifiedList)}
-
-    Return a STRICT JSON array of arrays of IDs (indices).
-    Example: [[0, 2], [1], [3, 4, 5]]
-    Return ONLY the JSON. No markdown.
-    `
-
-    try {
-        const result = await model.generateContent(prompt)
-        const text = result.response.text()
-        const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim()
-        const groups: number[][] = JSON.parse(cleanText)
-
-        // Convert indices back to full cluster objects
-        return groups.map(indices => {
-            const items = indices.map(i => originalArticles[i]).filter(Boolean)
-            if (items.length === 0) return null
-
-            // Calc Bias Distribution
-            const biasDist: Record<string, number> = { 'left': 0, 'center-left': 0, 'center': 0, 'center-right': 0, 'right': 0 }
-            items.forEach(i => {
-                if (i.bias && biasDist[i.bias] !== undefined) biasDist[i.bias]++
-            })
-
-            // Calc Blindspot
-            let blindspot = false
-            let blindspotSide: 'left' | 'right' | undefined = undefined
-            const leftCount = biasDist['left'] + biasDist['center-left']
-            const rightCount = biasDist['right'] + biasDist['center-right']
-
-            if ((leftCount > 0 && rightCount === 0)) { blindspot = true; blindspotSide = 'right' }
-            else if ((rightCount > 0 && leftCount === 0)) { blindspot = true; blindspotSide = 'left' }
-
-            // Title selection (Prefer longer title or first one)
-            const mainStory = items[0]
-
-            return {
-                id: crypto.randomUUID(),
-                mainTitle: mainStory.title,
-                summary: mainStory.description || mainStory.title,
-                items: items,
-                biasDistribution: biasDist,
-                firstPublishedAt: mainStory.publishedAt,
-                blindspot,
-                blindspotSide
-            }
-        }).filter(Boolean) as StoryCluster[]
-
-    } catch (error) {
-        console.error("Gemini Clustering Error:", error)
-        return [] // Fail safe
-    }
-}
-
-async function analyzeCluster(cluster: StoryCluster): Promise<any> {
-    const summaryList = cluster.items.map(a =>
-        `- Fuente: ${a.source} (${getBiasForSource(a.source)})\n  Titular: ${a.title}`
-    ).join('\n')
-
-    const prompt = `
-    Analista Senior de Medios:
-    Analiza este grupo de noticias sobre el MISMO evento.
-    
-    NOTICIAS:
-    ${summaryList}
-
-    OUTPUT JSON (Minified):
-    {
-        "resumen_ejecutivo": "Sintesis de 30 palabras del hecho y cómo lo cubren los medios.",
-        "kpis": { "polarizacion": 1-10, "diversidad": "ALTA/MEDIA/BAJA" }
-    }
-    ONLY JSON.
-    `
-
-    try {
-        const result = await model.generateContent(prompt)
-        const text = result.response.text()
-        const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim()
-        return JSON.parse(cleanText)
-    } catch (e) {
-        return null
-    }
-}
+});
